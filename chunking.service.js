@@ -6,31 +6,13 @@ const chunkSize = 1024 * 1024;
 const chunkQueue$ = new Subject();
 const maxConnections = 3;
 
-interface Chunk {
-    fileSize: number;
-    fileName: string
-    byteArray: Uint8Array;
-    sequence: number;
-    totalChunks: number;
-    fileMD5: string;
-}
-
-interface ChunkSize {
-    startByte: number;
-    endByte: number;
-}
-interface FileData {
-    file: File;
-    chunkSizes?: ChunkSize[]
-}
-
 // this is where the magic happens a queue of document chunk uploads that limits the number of 
 // concurrent uploads - in just 3 lines of code - got to love RxJs!
 chunkQueue$
-    .pipe(mergeMap((data: any) => data, null, this._maxConnections))
+    .pipe(mergeMap((data) => data, null, maxConnections))
     .subscribe();
 
-function uploadFile(fileData: FileData) {
+function uploadFile(fileData) {
     const chunkSizes = calculateChunks(fileData.file.size, chunkSize);
     fileData.chunkSizes = chunkSizes;
     const getChunks$ = getChunks(fileData);
@@ -47,7 +29,7 @@ function uploadFile(fileData: FileData) {
 
 }
 
-function calculateChunks(fileSize: number, chunkSize: number) {
+function calculateChunks(fileSize, chunkSize) {
     const chunkSizes: ChunkSize[] = [];
     const numberOfChunks = Math.max(Math.ceil(fileSize / chunkSize), 1);
     for (let offset = 0; offset < numberOfChunks; offset++) {
@@ -60,13 +42,13 @@ function calculateChunks(fileSize: number, chunkSize: number) {
     return chunkSizes;
 }
 
-function getChunks(fileData: FileData) {
-    return Observable.create((observer: Observer<Chunk>) => {
+function getChunks(fileData) {
+    return Observable.create((observer) => {
         chunkReader(0, fileData, observer);
     }).pipe(publish());
 }
 
-function chunkReader(index: number, fileData: FileData, observer: Observer<Chunk>) {
+function chunkReader(index, fileData, observer) {
     if (index >= fileData.chunkSizes.length) {
         observer.complete();
     } else {
