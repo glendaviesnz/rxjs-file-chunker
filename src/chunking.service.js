@@ -1,6 +1,6 @@
 import { Subject, Observable, combineLatest, of, Observer } from 'rxjs';
 import { mergeMap, reduce, filter, map, tap, take, publish, toArray } from 'rxjs/operators';
-import * as SparkMD5 from 'spark-md5';
+import * as CryptoJS from 'crypto-js';
 
 const chunkSize = 1024 * 1024;
 const chunkQueue$ = new Subject();
@@ -12,25 +12,23 @@ chunkQueue$
     .pipe(mergeMap((data) => data, null, maxConnections))
     .subscribe();
 
-function uploadFile(fileData) {
+export function uploadFile(file) {
+    const fileData = { file };
     const chunkSizes = calculateChunks(fileData.file.size, chunkSize);
     fileData.chunkSizes = chunkSizes;
     const getChunks$ = getChunks(fileData);
 
     const chunkArray$ = getChunks$.pipe(toArray());
-    chunkArray$.subscribe(chunks => console.log(chunks));
-    // const calculateMD5$ = getChunks$.pipe(reduce((acc: number, chunk: Chunk) => {
-    //     return acc ^ crc32.computeHash(chunk.byteArray, 0, chunk.byteArray.length);
-    // }, 0));
+    const fileHash$ = calculateHash(chunkArray$);
 
-    // startChunkUpload(chunkArray$, calculateMD5$);
+    // startChunkUpload(chunkArray$, fileHash$);
 
     getChunks$.connect();
 
 }
 
 function calculateChunks(fileSize, chunkSize) {
-    const chunkSizes: ChunkSize[] = [];
+    const chunkSizes = [];
     const numberOfChunks = Math.max(Math.ceil(fileSize / chunkSize), 1);
     for (let offset = 0; offset < numberOfChunks; offset++) {
         const startByte = offset * chunkSize;
@@ -71,35 +69,26 @@ function chunkReader(index, fileData, observer) {
     }
 }
 
-// function calculateMD5() {
-//     const spark = new SparkMD5.ArrayBuffer();
-//     const fileReader = new FileReader();
+function calculateHash(chunks$) {
+    var SHA256 = CryptoJS.algo.SHA256.create();
 
-//     fileReader.onload = function (e) {
-//         console.log('read chunk nr', currentChunk + 1, 'of', chunks);
-//         spark.append(e.target.result);                   // Append array buffer
-//         currentChunk++;
+    return chunks$.pipe(map(chunks => {
+        chunks.forEach(chunk => {
+            const wordBuffer = CryptoJS.lib.WordArray.create(chunk.byteArray);
+            SHA256.update(wordBuffer);
+        });
+        return SHA256.finalize().toString();
+    }))
+}
 
-//         if (currentChunk < chunks) {
-//             loadNext();
-//         } else {
-//             console.log('finished loading');
-//             console.info('computed hash', spark.end());  // Compute hash
-//         }
-//     };
+// function loadNext() {
+//     var start = currentChunk * chunkSize,
+//         end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
 
-//     fileReader.onerror = function () {
-//         console.warn('oops, something went wrong.');
-//     };
+//     fileReader.readAsArrayBuffer(blobSlice.call(file, start, end));
+// }
 
-//     function loadNext() {
-//         var start = currentChunk * chunkSize,
-//             end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
-
-//         fileReader.readAsArrayBuffer(blobSlice.call(file, start, end));
-//     }
-
-//     loadNext();
+// loadNext();
 // }
 // function startChunkUpload(chunkArray$: Observable<Chunk[]>, calculateCrc$: Observable<number>) {
 //     combineLatest(chunkArray$, calculateCrc$, (chunksArray: Chunk[], crc: number) => {
