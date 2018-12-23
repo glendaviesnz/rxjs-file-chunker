@@ -6,8 +6,8 @@ import FileInput from './FileInput';
 class App extends Component {
   render() {
     return (
-      <div className="App">
-        RxJs File Chunker
+      <div className="app-container">
+        <h1>RxJs File Chunker</h1>
         <FileInput />
       </div>
     );

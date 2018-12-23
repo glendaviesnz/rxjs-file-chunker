@@ -1,6 +1,8 @@
 import * as axios from 'axios';
 import { Observable } from 'rxjs';
 
+import { appConfig } from './config.js';
+
 export function httpUpload(file) {
     return Observable.create((observer) => {
         var config = {
@@ -9,7 +11,7 @@ export function httpUpload(file) {
                 observer.next({ progress: percentCompleted });
             }
         };
-        axios.post('http://localhost:3100/upload', file, config)
+        axios.post(`${appConfig.apiUrl}/upload`, file, config)
             .then(function (response) {
                 observer.next({ status: response.status });
                 observer.complete();
