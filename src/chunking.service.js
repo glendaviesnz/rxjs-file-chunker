@@ -1,6 +1,18 @@
-import { Subject, Observable, combineLatest, of, Observer } from 'rxjs';
-import { mergeMap, reduce, filter, map, tap, take, publish, toArray } from 'rxjs/operators';
+import { Subject, Observable, combineLatest, of } from 'rxjs';
+import { 
+    mergeMap, 
+    filter, 
+    map, 
+    tap, 
+    take, 
+    publish, 
+    toArray, 
+    catchError, 
+    distinctUntilChanged 
+} from 'rxjs/operators';
 import * as CryptoJS from 'crypto-js';
+
+import { httpUpload } from './http-observable';
 
 const chunkSize = 1024 * 1024;
 const chunkQueue$ = new Subject();
@@ -17,14 +29,13 @@ export function uploadFile(file) {
     const chunkSizes = calculateChunks(fileData.file.size, chunkSize);
     fileData.chunkSizes = chunkSizes;
     const getChunks$ = getChunks(fileData);
-
     const chunkArray$ = getChunks$.pipe(toArray());
-    const fileHash$ = calculateHash(chunkArray$);
-
-    // startChunkUpload(chunkArray$, fileHash$);
+    const checkSum$ = calculateCheckSum(chunkArray$);
+    const progress$ = new Subject().pipe(distinctUntilChanged());
+    startChunkUpload(chunkArray$, checkSum$, progress$);
 
     getChunks$.connect();
-
+    return progress$
 }
 
 function calculateChunks(fileSize, chunkSize) {
@@ -60,7 +71,7 @@ function chunkReader(index, fileData, observer) {
                 byteArray: unint8Array,
                 sequence: index + 1,
                 totalChunks: fileData.chunkSizes.length,
-                fileMD5: null,
+                fileHash: null,
             });
             chunkReader(index + 1, fileData, observer);
         };
@@ -69,7 +80,7 @@ function chunkReader(index, fileData, observer) {
     }
 }
 
-function calculateHash(chunks$) {
+function calculateCheckSum(chunks$) {
     var SHA256 = CryptoJS.algo.SHA256.create();
 
     return chunks$.pipe(map(chunks => {
@@ -81,112 +92,93 @@ function calculateHash(chunks$) {
     }))
 }
 
-// function loadNext() {
-//     var start = currentChunk * chunkSize,
-//         end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
+function startChunkUpload(chunkArray$, checkSum$, progress$) {
+    combineLatest(chunkArray$, checkSum$, (chunksArray, checkSum) => {
+        const chunksWithHash = chunksArray.map(chunk => {
+            chunk.checkSum = checkSum;
+            return chunk;
+        });
+        return chunksWithHash;
+    }).pipe(
+        filter((chunks) => chunks.length > 0),
+        map((chunks) => uploadFirstChunk(chunks, progress$))
+    )
+        .subscribe();
+}
 
-//     fileReader.readAsArrayBuffer(blobSlice.call(file, start, end));
-// }
+function uploadFirstChunk(chunks, progress$) {
+    const chunk = chunks[0]
+    const firstChunk$ = httpUpload(getChunkBodyData(chunk))
+        .pipe(
+            tap((response) => {
+                if (response.progress) {
+                    progress$.next(calculateTotalProgress(chunk, response.progress));
+                }
+            }),
+            filter((response) => response.status),
+            take(1),
+            map((response) => {
+                if (chunks.length > 1) {
+                    return uploadRemainingChunks(chunks, progress$);
+                } else {
+                    completeUpload(progress$);
+                }
+            }),
+            catchError((error) => handleError(chunk, error))
+        );
+    chunkQueue$.next(firstChunk$);
+}
 
-// loadNext();
-// }
-// function startChunkUpload(chunkArray$: Observable<Chunk[]>, calculateCrc$: Observable<number>) {
-//     combineLatest(chunkArray$, calculateCrc$, (chunksArray: Chunk[], crc: number) => {
-//         const chunksWithCrc = chunksArray.map(chunk => {
-//             chunk.fileCrc = crc;
-//             return chunk;
-//         });
-//         return chunksWithCrc;
-//     })
-//         .pipe(
-//             filter((chunks: Chunk[]) => chunks.length > 0),
-//             map((chunks: Chunk[]) => this.uploadFirstChunk(chunks))
-//         )
-//         .subscribe();
-// }
+function getChunkBodyData(chunk) {
+    chunk.data = new Blob([chunk.byteArray]);
+    chunk.byteArray = null;
+    const data = new FormData();
+    data.append('checksum', chunk.checkSum);
+    data.append('sequence', chunk.sequence);
+    data.append('file', chunk.data);
+    return data;
+}
 
-// function uploadFirstChunk(chunks: Chunk[]) {
-//     const firstChunk = chunks[0];
-//     firstChunk.data = new Blob([firstChunk.byteArray]);
-//     firstChunk.byteArray = null;
+function uploadRemainingChunks(chunks, progress$) {
+    const remainingChunks = chunks.filter((chunk) => chunk.sequence > 1);
+    
+    uploadChunk(0, remainingChunks, progress$);
+}
 
-//     const firstChunk$ = this._apiService.uploadChunk(chunks[0])
-//         .pipe(
-//             filter((event: HttpEvent<any>) => event.type === HttpEventType.UploadProgress || event instanceof HttpResponse),
-//             tap((event: HttpProgressEvent | HttpResponse<any>) => {
-//                 if (event.type === HttpEventType.UploadProgress) {
-//                     this.trackProgress(firstChunk, event.loaded, event.total);
-//                 }
-//             }),
-//             filter((event: HttpEvent<any>) => event instanceof HttpResponse),
-//             take(1),
-//             map((event: HttpResponse<any>) => {
-//                 const body = event.body;
-//                 const uploadDocumentId = body.uploadDocumentId;
-//                 if (chunks.length > 1) {
-//                     return this.uploadRemainingChunks(chunks, uploadDocumentId);
-//                 } else {
-//                     const documentUploadRequestId = body.documentUploadRequestId;
-//                     this.completeUpload(firstChunk.placeholder, firstChunk.tabId, event.status, documentUploadRequestId);
-//                 }
-//             })
-//         )
-//         .catch((error) => this.handleError(firstChunk, error));
-//     this._chunkQueue$.next(firstChunk$);
-// }
+function uploadChunk(index, chunks, progress$) {
+    const chunk = chunks[index];
+    const chunk$ = httpUpload(getChunkBodyData(chunk))
+        .pipe(
+            tap((response) => {
+                if (response.progress) {
+                    progress$.next(calculateTotalProgress(chunk, response.progress));
+                }
+            }),
+            filter((response) => response.status),
+            take(1),
+            map((response) => {
+                if (chunk.sequence === chunk.totalChunks) {
+                    completeUpload(progress$);
+                } else {
+                    uploadChunk(index + 1, chunks, progress$);
+                }
+                return { status: 'done' };
+            }),
+            catchError((error) => handleError(chunk, error))
+        );
+    chunkQueue$.next(chunk$);
+}
 
-// function uploadRemainingChunks(chunks: Chunk[], uploadDocumentId: number) {
-//     const remainingChunks = chunks
-//         .filter((chunk: Chunk) => chunk.sequence > 1)
-//         .map((chunk: Chunk) => {
-//             chunk.uploadDocumentId = uploadDocumentId;
-//             return chunk;
-//         });
-//     this.uploadChunk(0, remainingChunks);
-// }
+function calculateTotalProgress(chunk, progress) {
+    const chunkPercentage = (100 / chunk.totalChunks);
+    const percentageComplete = (chunk.sequence - 1) * chunkPercentage;
+    return Math.round((progress/ chunk.totalChunks) + percentageComplete);
+}
 
-// function uploadChunk(index: number, chunks: Chunk[]) {
-//     const chunk = chunks[index];
-//     chunk.data = new Blob([chunk.byteArray]);
-//     chunk.fileSize = chunk.data.size;
-//     chunk.byteArray = null;
-//     const chunk$ = this._apiService.uploadChunk(chunk)
-//         .pipe(filter((event: HttpEvent<any>) => event.type === HttpEventType.UploadProgress
-//             || event instanceof HttpResponse),
-//             tap((event: HttpProgressEvent | HttpResponse<any>) => {
-//                 if (event.type === HttpEventType.UploadProgress) {
-//                     this.trackProgress(chunk, event.loaded, event.total);
-//                 }
-//             }),
-//             filter((event: HttpEvent<any>) => event instanceof HttpResponse),
-//             take(1),
-//             map((event: HttpResponse<any>) => {
-//                 if (chunk.sequence === chunk.totalChunks) {
-//                     const documentUploadRequestId = event.body.documentUploadRequestId;
-//                     this.completeUpload(chunk.placeholder, chunk.tabId, event.status, documentUploadRequestId);
-//                 } else {
-//                     this.uploadChunk(index + 1, chunks);
-//                 }
-//                 return { status: 'done' };
-//             })
-//         )
-//         .catch((error) => this.handleError(chunk, error));
-//     this._chunkQueue$.next(chunk$);
-// }
+function completeUpload(progress$) {
+    progress$.next('complete');
+}
 
-// function trackProgress(chunk: Chunk, loaded: number, total: number) {
-//     const chunkPercentage = (100 / chunk.totalChunks);
-//     const percentageComplete = (chunk.sequence - 1) * chunkPercentage;
-//     const percentDone = Math.round(((100 * loaded / total) / chunk.totalChunks) + percentageComplete);
-// }
-
-// function completeUpload(status: number) {
-
-//     if (status === 200) {
-//         // success
-//     }
-// }
-
-// function handleError(chunk: Chunk, error: any) {
-//     return of(error);
-// }
+function handleError(chunk, error) {
+    return of(error);
+}
