@@ -6,17 +6,17 @@ import { appConfig } from './config.js';
 export function httpUpload(file) {
     return Observable.create((observer) => {
         var config = {
-            onUploadProgress: function (progressEvent) {
+            onUploadProgress: (progressEvent)  => {
                 var percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
                 observer.next({ progress: percentCompleted });
             }
         };
         axios.post(`${appConfig.apiUrl}/upload`, file, config)
-            .then(function (response) {
+            .then((response) => {
                 observer.next({ status: response.status });
                 observer.complete();
             })
-            .catch(function (error) {
+            .catch((error) => {
                 observer.error(error);
             });
     })
