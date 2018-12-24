@@ -5,7 +5,7 @@ This is something I built for specific project, so is here as an example that co
 
 The chunking and uploading service currently chunks the file into 1MB chunks, get a checksum for the file, and then uploads each chunk sequentially. There is a max concurrency setting which currently allows only 3 chunks at a time to upload and the others are queued. This is to prevent all the browsers http connections to a single domain to be maxed out with file uploads.
 
-To run the example in one terminal run:
+To run the example, in one terminal run:
 
 ```
 node src/server.js
